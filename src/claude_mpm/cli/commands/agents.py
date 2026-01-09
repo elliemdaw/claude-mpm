@@ -133,6 +133,7 @@ class AgentsCommand(AgentCommand):
 
             # Route to appropriate subcommand
             command_map = {
+                AgentCommands.SYNC.value: self._sync_agents,
                 AgentCommands.LIST.value: self._list_agents,
                 AgentCommands.DEPLOY.value: lambda a: self._deploy_agents(
                     a, force=False
@@ -233,6 +234,93 @@ class AgentsCommand(AgentCommand):
         except Exception as e:
             self.logger.error(f"Error getting agent versions: {e}", exc_info=True)
             return CommandResult.error_result(f"Error getting agent versions: {e}")
+
+    def _sync_agents(self, args) -> CommandResult:
+        """Sync agents from remote sources.
+
+        This exposes the startup sync functionality as a CLI command,
+        allowing users to manually trigger agent synchronization.
+        """
+        try:
+            from ...services.agents.startup_sync import sync_agents_on_startup
+
+            force = getattr(args, "force", False)
+            source_filter = getattr(args, "source", None)
+
+            # If source filter specified, we need custom config
+            config = None
+            if source_filter:
+                from ...core.config import Config
+
+                config_obj = Config()
+                config = config_obj.to_dict()
+                # Filter sources to only the specified one
+                agent_sync = config.get("agent_sync", {})
+                sources = agent_sync.get("sources", [])
+                filtered = [s for s in sources if s.get("id") == source_filter]
+                if not filtered:
+                    return CommandResult.error_result(
+                        f"Source '{source_filter}' not found in configured sources"
+                    )
+                config["agent_sync"]["sources"] = filtered
+
+            result = sync_agents_on_startup(config=config, force_refresh=force)
+
+            output_format = self._get_output_format(args)
+
+            if not result.get("enabled"):
+                msg = "Agent sync is disabled in configuration"
+                if self._is_structured_format(output_format):
+                    print(
+                        self._formatter.format_as_json(
+                            {"enabled": False, "message": msg}
+                        )
+                    )
+                else:
+                    print(f"⚠️  {msg}")
+                return CommandResult.success_result(msg, data=result)
+
+            # Format output
+            downloaded = result.get("total_downloaded", 0)
+            cached = result.get("cache_hits", 0)
+            sources_synced = result.get("sources_synced", 0)
+            duration_ms = result.get("duration_ms", 0)
+            errors = result.get("errors", [])
+
+            if self._is_structured_format(output_format):
+                formatted = (
+                    self._formatter.format_as_json(result)
+                    if str(output_format).lower() == "json"
+                    else self._formatter.format_as_yaml(result)
+                )
+                print(formatted)
+            else:
+                if sources_synced > 0:
+                    print(f"✓ Synced {sources_synced} source(s)")
+                    print(f"  Downloaded: {downloaded} agents")
+                    print(f"  Cached: {cached} agents")
+                    print(f"  Duration: {duration_ms}ms")
+                else:
+                    print("No sources synced")
+
+                if errors:
+                    print(f"\n⚠️  {len(errors)} error(s) occurred:")
+                    for error in errors:
+                        print(f"  - {error}")
+
+            if errors:
+                return CommandResult.success_result(
+                    f"Sync completed with {len(errors)} errors",
+                    data=result,
+                )
+            return CommandResult.success_result(
+                f"Synced {downloaded} agents from {sources_synced} source(s)",
+                data=result,
+            )
+
+        except Exception as e:
+            self.logger.error(f"Error syncing agents: {e}", exc_info=True)
+            return CommandResult.error_result(f"Error syncing agents: {e}")
 
     def _list_agents(self, args) -> CommandResult:
         """List available or deployed agents."""

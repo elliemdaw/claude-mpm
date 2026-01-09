@@ -300,3 +300,233 @@ class TestAgentsCommand:
             assert result.success is False
             assert "Error managing agents" in result.message
             assert "Test error" in result.message
+
+    def test_run_sync_command(self):
+        """Test sync agents command routes correctly."""
+        args = Namespace(agents_command=AgentCommands.SYNC.value, format="text")
+
+        with patch.object(self.command, "_sync_agents") as mock_sync:
+            mock_sync.return_value = CommandResult.success_result("Agents synced")
+
+            result = self.command.run(args)
+
+            assert isinstance(result, CommandResult)
+            assert result.success is True
+            mock_sync.assert_called_once_with(args)
+
+    @patch("claude_mpm.services.agents.startup_sync.sync_agents_on_startup")
+    def test_sync_agents_success(self, mock_sync_on_startup):
+        """Test _sync_agents with successful sync."""
+        mock_sync_on_startup.return_value = {
+            "enabled": True,
+            "sources_synced": 1,
+            "total_downloaded": 10,
+            "cache_hits": 5,
+            "errors": [],
+            "duration_ms": 500,
+        }
+
+        args = Namespace(
+            agents_command=AgentCommands.SYNC.value,
+            format="text",
+            force=False,
+            source=None,
+        )
+
+        result = self.command._sync_agents(args)
+
+        assert isinstance(result, CommandResult)
+        assert result.success is True
+        assert "10" in result.message  # downloaded count
+        assert "1" in result.message  # sources count
+        mock_sync_on_startup.assert_called_once_with(config=None, force_refresh=False)
+
+    @patch("claude_mpm.services.agents.startup_sync.sync_agents_on_startup")
+    def test_sync_agents_with_force(self, mock_sync_on_startup):
+        """Test _sync_agents with force flag."""
+        mock_sync_on_startup.return_value = {
+            "enabled": True,
+            "sources_synced": 1,
+            "total_downloaded": 15,
+            "cache_hits": 0,
+            "errors": [],
+            "duration_ms": 1200,
+        }
+
+        args = Namespace(
+            agents_command=AgentCommands.SYNC.value,
+            format="text",
+            force=True,
+            source=None,
+        )
+
+        result = self.command._sync_agents(args)
+
+        assert isinstance(result, CommandResult)
+        assert result.success is True
+        mock_sync_on_startup.assert_called_once_with(config=None, force_refresh=True)
+
+    @patch("claude_mpm.services.agents.startup_sync.sync_agents_on_startup")
+    def test_sync_agents_disabled(self, mock_sync_on_startup):
+        """Test _sync_agents when sync is disabled in config."""
+        mock_sync_on_startup.return_value = {
+            "enabled": False,
+            "sources_synced": 0,
+            "total_downloaded": 0,
+            "cache_hits": 0,
+            "errors": [],
+            "duration_ms": 0,
+        }
+
+        args = Namespace(
+            agents_command=AgentCommands.SYNC.value,
+            format="text",
+            force=False,
+            source=None,
+        )
+
+        result = self.command._sync_agents(args)
+
+        assert isinstance(result, CommandResult)
+        assert result.success is True
+        assert "disabled" in result.message.lower()
+
+    @patch("claude_mpm.services.agents.startup_sync.sync_agents_on_startup")
+    def test_sync_agents_with_errors(self, mock_sync_on_startup):
+        """Test _sync_agents when sync has errors."""
+        mock_sync_on_startup.return_value = {
+            "enabled": True,
+            "sources_synced": 1,
+            "total_downloaded": 5,
+            "cache_hits": 2,
+            "errors": ["Failed to sync agent X", "Network error for agent Y"],
+            "duration_ms": 800,
+        }
+
+        args = Namespace(
+            agents_command=AgentCommands.SYNC.value,
+            format="text",
+            force=False,
+            source=None,
+        )
+
+        result = self.command._sync_agents(args)
+
+        assert isinstance(result, CommandResult)
+        assert result.success is True  # Partial success is still success
+        assert "2 errors" in result.message
+
+    @patch("claude_mpm.services.agents.startup_sync.sync_agents_on_startup")
+    def test_sync_agents_json_format(self, mock_sync_on_startup):
+        """Test _sync_agents with JSON output format."""
+        mock_sync_on_startup.return_value = {
+            "enabled": True,
+            "sources_synced": 1,
+            "total_downloaded": 10,
+            "cache_hits": 5,
+            "errors": [],
+            "duration_ms": 500,
+        }
+
+        args = Namespace(
+            agents_command=AgentCommands.SYNC.value,
+            format="json",
+            force=False,
+            source=None,
+        )
+
+        result = self.command._sync_agents(args)
+
+        assert isinstance(result, CommandResult)
+        assert result.success is True
+        assert result.data is not None
+        assert result.data["enabled"] is True
+        assert result.data["total_downloaded"] == 10
+
+    @patch("claude_mpm.services.agents.startup_sync.sync_agents_on_startup")
+    def test_sync_agents_exception_handling(self, mock_sync_on_startup):
+        """Test _sync_agents handles exceptions gracefully."""
+        mock_sync_on_startup.side_effect = Exception("Network connection failed")
+
+        args = Namespace(
+            agents_command=AgentCommands.SYNC.value,
+            format="text",
+            force=False,
+            source=None,
+        )
+
+        result = self.command._sync_agents(args)
+
+        assert isinstance(result, CommandResult)
+        assert result.success is False
+        assert "Error syncing agents" in result.message
+
+    @patch("claude_mpm.core.config.Config")
+    @patch("claude_mpm.services.agents.startup_sync.sync_agents_on_startup")
+    def test_sync_agents_with_source_filter(self, mock_sync_on_startup, mock_config):
+        """Test _sync_agents with source filter."""
+        mock_config_instance = Mock()
+        mock_config_instance.to_dict.return_value = {
+            "agent_sync": {
+                "enabled": True,
+                "sources": [
+                    {"id": "source1", "url": "https://example.com/1"},
+                    {"id": "source2", "url": "https://example.com/2"},
+                ],
+            }
+        }
+        mock_config.return_value = mock_config_instance
+
+        mock_sync_on_startup.return_value = {
+            "enabled": True,
+            "sources_synced": 1,
+            "total_downloaded": 5,
+            "cache_hits": 0,
+            "errors": [],
+            "duration_ms": 300,
+        }
+
+        args = Namespace(
+            agents_command=AgentCommands.SYNC.value,
+            format="text",
+            force=False,
+            source="source1",
+        )
+
+        result = self.command._sync_agents(args)
+
+        assert isinstance(result, CommandResult)
+        assert result.success is True
+        # Verify filtered config was passed
+        call_args = mock_sync_on_startup.call_args
+        config_passed = call_args.kwargs.get("config")
+        assert config_passed is not None
+        assert len(config_passed["agent_sync"]["sources"]) == 1
+        assert config_passed["agent_sync"]["sources"][0]["id"] == "source1"
+
+    @patch("claude_mpm.core.config.Config")
+    def test_sync_agents_source_not_found(self, mock_config):
+        """Test _sync_agents with non-existent source filter."""
+        mock_config_instance = Mock()
+        mock_config_instance.to_dict.return_value = {
+            "agent_sync": {
+                "enabled": True,
+                "sources": [
+                    {"id": "source1", "url": "https://example.com/1"},
+                ],
+            }
+        }
+        mock_config.return_value = mock_config_instance
+
+        args = Namespace(
+            agents_command=AgentCommands.SYNC.value,
+            format="text",
+            force=False,
+            source="nonexistent",
+        )
+
+        result = self.command._sync_agents(args)
+
+        assert isinstance(result, CommandResult)
+        assert result.success is False
+        assert "not found" in result.message

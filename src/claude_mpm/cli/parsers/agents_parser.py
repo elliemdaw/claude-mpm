@@ -54,6 +54,25 @@ Available commands:
         dest="agents_command", help="Agent commands", metavar="SUBCOMMAND"
     )
 
+    # Sync agents from remote sources
+    sync_agents_parser = agents_subparsers.add_parser(
+        AgentCommands.SYNC.value,
+        help="Sync agents from remote sources",
+        description="Updates agent definitions from remote git repositories. "
+        "This keeps your agents up-to-date with the latest improvements.",
+    )
+    sync_agents_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Force sync even if cache is fresh (bypasses ETag check)",
+    )
+    sync_agents_parser.add_argument(
+        "--source",
+        type=str,
+        metavar="SOURCE_ID",
+        help="Sync specific source only (e.g., 'bobmatnyc/claude-mpm-agents')",
+    )
+
     # List agents
     list_agents_parser = agents_subparsers.add_parser(
         AgentCommands.LIST.value, help="List available agents"
